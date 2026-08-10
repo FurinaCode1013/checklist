@@ -41,13 +41,13 @@ public class MainActivity extends AppCompatActivity {
         public String id;
         public String title;
         public boolean completed;
-        public int timerMode;
-        public int periodType;
+        public int timerMode;          // 0=固定周期, 1=完成后计时
+        public int periodType;         // 0=永不, 1=每天, 2=每周, 3=自定义天数 (仅 timerMode=0)
         public int periodDays;
         public int weekDay;
         public int resetHour;
         public int resetMinute;
-        public int afterHours;
+        public long afterMinutes;      // 完成后计时的总分钟数（替代 afterHours）
         public long lastClearTime;
         public String fileId;
     }
@@ -125,7 +125,13 @@ public class MainActivity extends AppCompatActivity {
             t.weekDay = obj.optInt("weekDay", 1);
             t.resetHour = obj.optInt("resetHour", 0);
             t.resetMinute = obj.optInt("resetMinute", 0);
-            t.afterHours = obj.optInt("afterHours", 0);
+            // 读取 afterMinutes，兼容旧的 afterHours
+            long afterMin = obj.optLong("afterMinutes", -1);
+            if (afterMin >= 0) {
+                t.afterMinutes = afterMin;
+            } else {
+                t.afterMinutes = obj.optInt("afterHours", 0) * 60L;
+            }
             t.lastClearTime = obj.optLong("lastClearTime");
             t.fileId = obj.optString("fileId");
             if (t.fileId.equals("null")) t.fileId = null;
@@ -173,7 +179,7 @@ public class MainActivity extends AppCompatActivity {
             obj.put("weekDay", t.weekDay);
             obj.put("resetHour", t.resetHour);
             obj.put("resetMinute", t.resetMinute);
-            obj.put("afterHours", t.afterHours);
+            obj.put("afterMinutes", t.afterMinutes);
             obj.put("lastClearTime", t.lastClearTime);
             obj.put("fileId", t.fileId == null ? JSONObject.NULL : t.fileId);
             arr.put(obj);
@@ -242,7 +248,7 @@ public class MainActivity extends AppCompatActivity {
             item.weekDay = 1;
             item.resetHour = 0;
             item.resetMinute = 0;
-            item.afterHours = 0;
+            item.afterMinutes = 0;
             item.lastClearTime = lastClear;
             item.fileId = f.id;
             items.add(item);
@@ -437,8 +443,9 @@ public class MainActivity extends AppCompatActivity {
         } catch (JSONException e) { e.printStackTrace(); }
     }
 
+    // addItem 使用 afterMinutes
     private void addItem(String title, int timerMode, int periodType, int periodDays, int weekDay,
-                         int resetHour, int resetMinute, int afterHours, String fileId, boolean completed) {
+                         int resetHour, int resetMinute, long afterMinutes, String fileId, boolean completed) {
         JSONObject data = loadData(this);
         List<TaskItem> items = parseItems(data);
         TaskItem t = new TaskItem();
@@ -451,7 +458,7 @@ public class MainActivity extends AppCompatActivity {
         t.weekDay = weekDay;
         t.resetHour = resetHour;
         t.resetMinute = resetMinute;
-        t.afterHours = afterHours;
+        t.afterMinutes = afterMinutes;
         t.lastClearTime = System.currentTimeMillis();
         t.fileId = fileId;
         items.add(t);
@@ -461,8 +468,9 @@ public class MainActivity extends AppCompatActivity {
         } catch (JSONException e) { e.printStackTrace(); }
     }
 
+    // updateItem 使用 afterMinutes
     private void updateItem(String itemId, String newTitle, int timerMode, int periodType, int periodDays,
-                            int weekDay, int resetHour, int resetMinute, int afterHours, boolean newCompleted) {
+                            int weekDay, int resetHour, int resetMinute, long afterMinutes, boolean newCompleted) {
         JSONObject data = loadData(this);
         List<TaskItem> items = parseItems(data);
         for (TaskItem t : items) {
@@ -474,7 +482,7 @@ public class MainActivity extends AppCompatActivity {
                 t.weekDay = weekDay;
                 t.resetHour = resetHour;
                 t.resetMinute = resetMinute;
-                t.afterHours = afterHours;
+                t.afterMinutes = afterMinutes;
                 t.completed = newCompleted;
                 break;
             }
@@ -513,6 +521,7 @@ public class MainActivity extends AppCompatActivity {
         } catch (JSONException e) { e.printStackTrace(); }
     }
 
+    // 计算剩余时间（毫秒），完成后计时改用 afterMinutes
     private long getRemainingMillis(TaskItem t) {
         long now = System.currentTimeMillis();
         if (t.timerMode == 0) {
@@ -575,7 +584,7 @@ public class MainActivity extends AppCompatActivity {
             return Math.max(0, resetCal.getTimeInMillis() - now);
         } else {
             if (!t.completed) return Long.MAX_VALUE;
-            long targetTime = t.lastClearTime + t.afterHours * 3600 * 1000L;
+            long targetTime = t.lastClearTime + t.afterMinutes * 60 * 1000L;
             if (targetTime <= now) return 0;
             else return targetTime - now;
         }
@@ -606,7 +615,11 @@ public class MainActivity extends AppCompatActivity {
                 default: return "";
             }
         } else {
-            return "完成后 " + t.afterHours + "小时";
+            long total = t.afterMinutes;
+            long hours = total / 60;
+            long minutes = total % 60;
+            if (minutes == 0) return "完成后 " + hours + "小时";
+            else return "完成后 " + hours + "小时" + minutes + "分钟";
         }
     }
 
@@ -617,7 +630,7 @@ public class MainActivity extends AppCompatActivity {
         boolean changed = false;
         for (TaskItem t : items) {
             if (t.timerMode == 1 && t.completed) {
-                long targetTime = t.lastClearTime + t.afterHours * 3600 * 1000L;
+                long targetTime = t.lastClearTime + t.afterMinutes * 60 * 1000L;
                 if (targetTime <= now) {
                     t.completed = false;
                     changed = true;
@@ -1328,6 +1341,7 @@ public class MainActivity extends AppCompatActivity {
         parent.addView(view);
     }
 
+    // 编辑对话框
     private void showEditItemDialog(final TaskItem t) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("编辑清单项");
@@ -1355,6 +1369,7 @@ public class MainActivity extends AppCompatActivity {
         else rbAfter.setChecked(true);
         addFormView(timerGroup, layout);
 
+        // ---- 固定周期布局 ----
         final LinearLayout fixedLayout = new LinearLayout(this);
         fixedLayout.setOrientation(LinearLayout.VERTICAL);
 
@@ -1412,30 +1427,55 @@ public class MainActivity extends AppCompatActivity {
         addFormView(timeLayout, fixedLayout);
         layout.addView(fixedLayout);
 
+        // ---- 完成后计时布局 ----
         final LinearLayout afterLayout = new LinearLayout(this);
         afterLayout.setOrientation(LinearLayout.VERTICAL);
 
-        final Spinner afterSpinner = new Spinner(this);
-        Integer[] afterOptions = {1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48, 72, 96, 120, 168, 240, 336, 720};
-        String[] afterStrings = new String[afterOptions.length];
-        for (int i = 0; i < afterOptions.length; i++) afterStrings[i] = afterOptions[i] + " 小时";
-        ArrayAdapter<String> afterAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, afterStrings);
-        afterAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        afterSpinner.setAdapter(afterAdapter);
-        int selectedIndex = 0;
-        for (int i = 0; i < afterOptions.length; i++) {
-            if (afterOptions[i] == t.afterHours) { selectedIndex = i; break; }
-        }
-        afterSpinner.setSelection(selectedIndex);
-        addFormView(afterSpinner, afterLayout);
-        afterLayout.setVisibility(t.timerMode == 1 ? View.VISIBLE : View.GONE);
+        LinearLayout afterInputLayout = new LinearLayout(this);
+        afterInputLayout.setOrientation(LinearLayout.HORIZONTAL);
+        afterInputLayout.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView afterHourLabel = new TextView(this);
+        afterHourLabel.setText("小时");
+        afterHourLabel.setTextSize(14);
+        afterInputLayout.addView(afterHourLabel);
+
+        final EditText etAfterHours = new EditText(this);
+        etAfterHours.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etAfterHours.setText(String.valueOf(t.afterMinutes / 60));
+        etAfterHours.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        afterInputLayout.addView(etAfterHours);
+
+        TextView afterMinLabel = new TextView(this);
+        afterMinLabel.setText("分钟");
+        afterMinLabel.setTextSize(14);
+        afterInputLayout.addView(afterMinLabel);
+
+        final EditText etAfterMinutes = new EditText(this);
+        etAfterMinutes.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etAfterMinutes.setText(String.valueOf(t.afterMinutes % 60));
+        etAfterMinutes.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        afterInputLayout.addView(etAfterMinutes);
+
+        afterLayout.addView(afterInputLayout);
         layout.addView(afterLayout);
 
+        // ---- 完成状态 ----
         final CheckBox cbCompleted = new CheckBox(this);
         cbCompleted.setText("已完成");
         cbCompleted.setChecked(t.completed);
         addFormView(cbCompleted, layout);
 
+        // ---- 根据 timerMode 设置初始可见性（关键修复） ----
+        if (t.timerMode == 1) {
+            fixedLayout.setVisibility(View.GONE);
+            afterLayout.setVisibility(View.VISIBLE);
+        } else {
+            fixedLayout.setVisibility(View.VISIBLE);
+            afterLayout.setVisibility(View.GONE);
+        }
+
+        // ---- 监听计时类型切换 ----
         timerGroup.setOnCheckedChangeListener((group, checkedId) -> {
             if (checkedId == rbFixed.getId()) {
                 fixedLayout.setVisibility(View.VISIBLE);
@@ -1465,7 +1505,9 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             int timerMode = (timerGroup.getCheckedRadioButtonId() == rbFixed.getId()) ? 0 : 1;
-            int periodType = 0, periodDays = 0, weekDay = 1, resetHour = 0, resetMinute = 0, afterHours = 0;
+            int periodType = 0, periodDays = 0, weekDay = 1, resetHour = 0, resetMinute = 0;
+            long afterMinutes = 0;
+
             if (timerMode == 0) {
                 periodType = spinnerPeriodType.getSelectedItemPosition();
                 if (periodType == 2) {
@@ -1486,15 +1528,22 @@ public class MainActivity extends AppCompatActivity {
                 resetHour = hourSpinner.getSelectedItemPosition();
                 resetMinute = minuteSpinner.getSelectedItemPosition();
             } else {
-                int pos = afterSpinner.getSelectedItemPosition();
-                afterHours = afterOptions[pos];
-                if (afterHours <= 0) {
-                    Toast.makeText(this, "请选择有效小时数", Toast.LENGTH_SHORT).show();
+                try {
+                    int h = Integer.parseInt(etAfterHours.getText().toString().trim());
+                    int m = Integer.parseInt(etAfterMinutes.getText().toString().trim());
+                    afterMinutes = h * 60L + m;
+                    if (afterMinutes <= 0) {
+                        Toast.makeText(this, "请输入有效时间", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                } catch (Exception e) {
+                    Toast.makeText(this, "请输入有效时间", Toast.LENGTH_SHORT).show();
                     return;
                 }
             }
             boolean completed = cbCompleted.isChecked();
-            updateItem(t.id, title, timerMode, periodType, periodDays, weekDay, resetHour, resetMinute, afterHours, completed);
+            updateItem(t.id, title, timerMode, periodType, periodDays, weekDay,
+                    resetHour, resetMinute, afterMinutes, completed);
             refreshFileDetail();
         });
 
@@ -1596,19 +1645,38 @@ public class MainActivity extends AppCompatActivity {
         addFormView(timeLayout, fixedLayout);
         layout.addView(fixedLayout);
 
+        // ---- 完成后计时（默认 24小时0分钟） ----
         final LinearLayout afterLayout = new LinearLayout(this);
         afterLayout.setOrientation(LinearLayout.VERTICAL);
-
-        final Spinner afterSpinner = new Spinner(this);
-        Integer[] afterOptions = {1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48, 72, 96, 120, 168, 240, 336, 720};
-        String[] afterStrings = new String[afterOptions.length];
-        for (int i = 0; i < afterOptions.length; i++) afterStrings[i] = afterOptions[i] + " 小时";
-        ArrayAdapter<String> afterAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, afterStrings);
-        afterAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        afterSpinner.setAdapter(afterAdapter);
-        afterSpinner.setSelection(5);
-        addFormView(afterSpinner, afterLayout);
         afterLayout.setVisibility(View.GONE);
+
+        LinearLayout afterInputLayout = new LinearLayout(this);
+        afterInputLayout.setOrientation(LinearLayout.HORIZONTAL);
+        afterInputLayout.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView afterHourLabel = new TextView(this);
+        afterHourLabel.setText("小时");
+        afterHourLabel.setTextSize(14);
+        afterInputLayout.addView(afterHourLabel);
+
+        final EditText etAfterHours = new EditText(this);
+        etAfterHours.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etAfterHours.setText("24");
+        etAfterHours.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        afterInputLayout.addView(etAfterHours);
+
+        TextView afterMinLabel = new TextView(this);
+        afterMinLabel.setText("分钟");
+        afterMinLabel.setTextSize(14);
+        afterInputLayout.addView(afterMinLabel);
+
+        final EditText etAfterMinutes = new EditText(this);
+        etAfterMinutes.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etAfterMinutes.setText("0");
+        etAfterMinutes.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        afterInputLayout.addView(etAfterMinutes);
+
+        afterLayout.addView(afterInputLayout);
         layout.addView(afterLayout);
 
         final CheckBox cbCompleted = new CheckBox(this);
@@ -1637,6 +1705,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         builder.setView(layout);
+
         builder.setPositiveButton("确定", (dialog, which) -> {
             String title = etTitle.getText().toString().trim();
             if (title.isEmpty()) {
@@ -1644,7 +1713,9 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             int timerMode = (timerGroup.getCheckedRadioButtonId() == rbFixed.getId()) ? 0 : 1;
-            int periodType = 0, periodDays = 0, weekDay = 1, resetHour = 0, resetMinute = 0, afterHours = 0;
+            int periodType = 0, periodDays = 0, weekDay = 1, resetHour = 0, resetMinute = 0;
+            long afterMinutes = 0;
+
             if (timerMode == 0) {
                 periodType = spinnerPeriodType.getSelectedItemPosition();
                 if (periodType == 2) {
@@ -1665,16 +1736,22 @@ public class MainActivity extends AppCompatActivity {
                 resetHour = hourSpinner.getSelectedItemPosition();
                 resetMinute = minuteSpinner.getSelectedItemPosition();
             } else {
-                int pos = afterSpinner.getSelectedItemPosition();
-                afterHours = afterOptions[pos];
-                if (afterHours <= 0) {
-                    Toast.makeText(this, "请选择有效小时数", Toast.LENGTH_SHORT).show();
+                try {
+                    int h = Integer.parseInt(etAfterHours.getText().toString().trim());
+                    int m = Integer.parseInt(etAfterMinutes.getText().toString().trim());
+                    afterMinutes = h * 60L + m;
+                    if (afterMinutes <= 0) {
+                        Toast.makeText(this, "请输入有效时间", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                } catch (Exception e) {
+                    Toast.makeText(this, "请输入有效时间", Toast.LENGTH_SHORT).show();
                     return;
                 }
             }
             boolean completed = cbCompleted.isChecked();
             addItem(title, timerMode, periodType, periodDays, weekDay,
-                    resetHour, resetMinute, afterHours, currentFileId, completed);
+                    resetHour, resetMinute, afterMinutes, currentFileId, completed);
             refreshFileDetail();
         });
 
